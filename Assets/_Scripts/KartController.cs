@@ -19,9 +19,7 @@ public class KartController : MonoBehaviour
     float speed, currentSpeed;
     float rotate, currentRotate;
     int driftDirection;
-    float driftPower;
     int driftMode = 0;
-    bool first, second, third;
     Color c;
 
     [Header("Bools")]
@@ -51,6 +49,14 @@ public class KartController : MonoBehaviour
     public bool autoAcceleration = false;
     [Range(0f, 1f)]
     public float autoAccelerationIntensity = 1f;
+
+    [Header("Drift Score System")]
+    [SerializeField] private DriftScoreSystem driftScoreSystem;
+
+    [Header("Drift Angle Control")]
+    [SerializeField] private float minimumDriftAngle = 15f;
+    [SerializeField] private float driftAngleThreshold = 0.8f;
+    [SerializeField] private bool enableDriftAngleControl = true;
 
     [Header("Model Parts")]
 
@@ -91,6 +97,12 @@ public class KartController : MonoBehaviour
             {
                 chromaticAberration.intensity.value = 0f;
             }
+        }
+        
+        // Setup DriftScoreSystem event subscription
+        if (driftScoreSystem != null)
+        {
+            driftScoreSystem.OnParticleColorChange += UpdateDriftParticles;
         }
     }
 
@@ -151,20 +163,30 @@ public class KartController : MonoBehaviour
         bool isJumping = shouldJump ?? false;
         bool jumpStateChangedThisFrame = isJumping != wasJumpingLastFrame;
         bool startedJumpingThisFrame = jumpStateChangedThisFrame && isJumping == true;
+        
+        // Check if drift should start (with angle control)
         if (startedJumpingThisFrame && !drifting && horizontalMovementThisFrame != 0)
         {
-            drifting = true;
-            driftDirection = horizontalMovementThisFrame > 0 ? 1 : -1;
-
-            foreach (ParticleSystem p in primaryParticles)
+            // Check if drift angle is valid
+            if (enableDriftAngleControl && !IsValidDriftAngle(horizontalMovementThisFrame))
             {
-                p.startColor = Color.clear;
-                p.Play();
+                // Drift angle too small, don't start drift
+                Debug.Log("Drift angle too small, drift not started");
             }
+            else
+            {
+                // Valid drift angle, start drift
+                drifting = true;
+                driftDirection = horizontalMovementThisFrame > 0 ? 1 : -1;
 
-            kartModel.parent.DOComplete();
-            // Zıplama efekti kaldırıldı
+                kartModel.parent.DOComplete();
 
+                // Start drift scoring
+                if (driftScoreSystem != null)
+                {
+                    driftScoreSystem.StartDrift();
+                }
+            }
         }
 
         if (drifting)
@@ -175,16 +197,26 @@ public class KartController : MonoBehaviour
             // Drift steering - kartın yönünü değiştirir
             float driftSteering = horizontalMovementThisFrame * steering * 0.5f; // Drift sırasında daha yumuşak steering
             Steer(horizontalMovementThisFrame > 0 ? 1 : -1, Mathf.Abs(horizontalMovementThisFrame));
-            
-            driftPower += powerControl;
 
-            ColorDrift();
+            // Update drift score
+            if (driftScoreSystem != null)
+            {
+                float currentSpeed = sphere.velocity.magnitude;
+                float controlValue = Mathf.Clamp01(Mathf.Abs(horizontalMovementThisFrame));
+                driftScoreSystem.UpdateDriftScore(currentSpeed, controlValue);
+            }
         }
 
         bool stoppedJumpingThisFrame = jumpStateChangedThisFrame && isJumping == false;
         if (stoppedJumpingThisFrame && drifting)
         {
             Boost();
+            
+            // End drift scoring
+            if (driftScoreSystem != null)
+            {
+                driftScoreSystem.EndDrift();
+            }
         }
 
         currentSpeed = Mathf.SmoothStep(currentSpeed, speed, Time.deltaTime * 12f); speed = 0f;
@@ -266,18 +298,9 @@ public class KartController : MonoBehaviour
             kartModel.Find("Tube002").GetComponentInChildren<ParticleSystem>().Play();
         }
 
-        driftPower = 0;
         driftMode = 0;
-        first = false; second = false; third = false;
-
-        foreach (ParticleSystem p in primaryParticles)
-        {
-            p.startColor = Color.clear;
-            p.Stop();
-        }
 
         kartModel.parent.DOLocalRotate(Vector3.zero, .5f).SetEase(Ease.OutBack);
-
     }
 
     public void Steer(int direction, float amount)
@@ -285,48 +308,40 @@ public class KartController : MonoBehaviour
         rotate = (steering * direction) * amount;
     }
 
-    public void ColorDrift()
+    // New method to check if drift angle is valid
+    private bool IsValidDriftAngle(float horizontalInput)
     {
-        if(!first)
-            c = Color.clear;
+        if (!enableDriftAngleControl) return true;
+        
+        // Calculate the drift angle based on horizontal input
+        float driftAngle = Mathf.Abs(horizontalInput) * minimumDriftAngle;
+        
+        // Check if the angle meets the threshold
+        return driftAngle >= (minimumDriftAngle * driftAngleThreshold);
+    }
 
-        if (driftPower > 50 && driftPower < 100-1 && !first)
+    // New method to handle particle color changes from DriftScoreSystem
+    private void UpdateDriftParticles(DriftScoreSystem.DriftLevel level)
+    {
+        // This method is called by DriftScoreSystem when level changes
+        // The actual particle color update is now handled by DriftScoreSystem
+        // This method can be used for additional kart-specific effects if needed
+        
+        // Example: Update kart model effects based on level
+        switch (level)
         {
-            first = true;
-            c = turboColors[0];
-            driftMode = 1;
-
-            PlayFlashParticle(c);
-        }
-
-        if (driftPower > 100 && driftPower < 150- 1 && !second)
-        {
-            second = true;
-            c = turboColors[1];
-            driftMode = 2;
-
-            PlayFlashParticle(c);
-        }
-
-        if (driftPower > 150 && !third)
-        {
-            third = true;
-            c = turboColors[2];
-            driftMode = 3;
-
-            PlayFlashParticle(c);
-        }
-
-        foreach (ParticleSystem p in primaryParticles)
-        {
-            var pmain = p.main;
-            pmain.startColor = c;
-        }
-
-        foreach(ParticleSystem p in secondaryParticles)
-        {
-            var pmain = p.main;
-            pmain.startColor = c;
+            case DriftScoreSystem.DriftLevel.Bronze:
+                // Bronze level effects
+                break;
+            case DriftScoreSystem.DriftLevel.Silver:
+                // Silver level effects
+                break;
+            case DriftScoreSystem.DriftLevel.Golden:
+                // Golden level effects
+                break;
+            case DriftScoreSystem.DriftLevel.Diamond:
+                // Diamond level effects
+                break;
         }
     }
 
@@ -359,9 +374,12 @@ public class KartController : MonoBehaviour
         }
     }
 
-    //private void OnDrawGizmos()
-    //{
-    //    Gizmos.color = Color.red;
-    //    Gizmos.DrawLine(transform.position + transform.up, transform.position - (transform.up * 2));
-    //}
+    private void OnDestroy()
+    {
+        // Unsubscribe from DriftScoreSystem events
+        if (driftScoreSystem != null)
+        {
+            driftScoreSystem.OnParticleColorChange -= UpdateDriftParticles;
+        }
+    }
 }
