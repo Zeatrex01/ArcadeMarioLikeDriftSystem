@@ -1,2 +1,2 @@
-# Mario Kart's Drifting | Mix Upgraded Drift System
+# Mario Kart's Drifting | Upgraded Drift System
 
